@@ -1,4 +1,4 @@
-#!/home/salchipapa/excel-mafla/myenv/bin/python
+#!/home/salchipapa/Downloads/excel-mafla/myenv/bin/python3.12
 # -*- coding: utf-8 -*-
 import re
 import sys
