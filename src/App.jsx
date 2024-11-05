@@ -72,7 +72,7 @@ export default function Component() {
     setIsLoading(true)
     setErrorMessage('')
     try {
-      const response = await fetch('https://excel-proviewer-production.up.railway.app/upload/', { 
+      const response = await fetch('https://excel-proviewer.onreder.com/upload/', { 
         method: 'POST', 
         body: formData 
       })
