@@ -1,10 +1,13 @@
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from io import BytesIO
 import openpyxl
 import uvicorn
+import holidays
+import base64
+from datetime import datetime
 
 app = FastAPI()
 
@@ -17,48 +20,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def safe_to_datetime(series):
-    """Convierte una serie a datetime, manejando errores y valores no válidos."""
+# Lista de rutas
+RUTAS = [
+    'C6-001', 'C6-002', 'C6-002A', 'C6-003', 'C6-004', 'C6-005', 'C6-005A', 'C6-006C',
+    'C6-007', 'C6-008', 'C6-009', 'C6-010B', 'C6-011', 'C6-012', 'C6-012A', 'C6-013',
+    'C6-014', 'C6-015A', 'C6-016', 'C6-016A', 'C6-018', 'C6-019', 'C6-019A', 'C6-020',
+    'C6-021', 'C6-022', 'C6-022A', 'C6-023', 'C6-024', 'C6-025', 'C6-025B'
+]
+
+def obtener_factor_dia(fecha, country_holidays):
+    if fecha.weekday() < 5:  # Lunes a Viernes
+        if fecha.date() not in country_holidays:
+            return 205  # Día hábil
+        return 100  # Festivo (si cae en día laboral)
+    elif fecha.weekday() == 5:  # Sábado
+        return 150
+    else:  # Domingo
+        return 100
+
+def obtener_tipo_dia(fecha, country_holidays):
+    if fecha.date() in country_holidays:
+        return 'festivo'
+    elif fecha.weekday() == 5:
+        return 'sabado'
+    elif fecha.weekday() == 6:
+        return 'domingo'
+    else:
+        return 'habil'
+
+def convert_to_datetime(df, column_name):
+    """Convierte una columna específica a datetime de manera segura."""
     try:
-        return pd.to_datetime(series, format='%d-%m-%y', errors='coerce')
+        df = df.copy()
+        df = df[~df[column_name].isin(['Prom. Pax x Mes', 'Prom. Km x Mes'])]
+        df[column_name] = pd.to_datetime(df[column_name], errors='coerce')
+        mask_nat = df[column_name].isna()
+        if mask_nat.any():
+            df.loc[mask_nat, column_name] = pd.to_datetime(
+                df.loc[mask_nat, column_name],
+                format='%d-%m-%y',
+                errors='coerce'
+            )
+        return df
     except Exception as e:
-        print(f"Error convirtiendo a datetime: {e}")
-        return pd.Series([pd.NaT] * len(series))
+        print(f"Error en la conversión de fecha: {e}")
+        return df
 
-@app.post("/preview/")
-async def preview_excel(file: UploadFile = File(...)):
-    """Endpoint para previsualizar los datos del archivo Excel cargado."""
-    try:
-        contents = await file.read()
-        excel_data = pd.ExcelFile(BytesIO(contents))
+def process_km_sheet(km_sheet, single_date, datos_fecha):
+    km_sheet['A1'] = single_date.strftime('%Y-%m-%d')
+    for j, ruta in enumerate(RUTAS, start=4):
+        km = datos_fecha[datos_fecha['Ruta'] == ruta]['Km'].sum()
+        km_sheet[f'B{j}'] = km
+    return km_sheet
 
-        # Validar si las hojas esperadas están presentes
-        if 'Data Usuarios' not in excel_data.sheet_names or 'Data Kilometros' not in excel_data.sheet_names:
-            return {"error": "Las hojas 'Data Usuarios' o 'Data Kilometros' no existen en el archivo."}, 400
-
-        # Acceder a las hojas de datos
-        df_usuarios = pd.read_excel(excel_data, sheet_name='Data Usuarios')
-        df_kilometros = pd.read_excel(excel_data, sheet_name='Data Kilometros')
-
-        # Validar si las columnas esperadas están presentes
-        if df_usuarios.shape[1] < 2 or df_kilometros.shape[1] < 2:
-            return {"error": "El archivo no contiene suficientes columnas en alguna de las hojas."}, 400
-
-        # Convertir la columna de fechas a datetime
-        df_usuarios.iloc[:, 1] = safe_to_datetime(df_usuarios.iloc[:, 1])
-        df_kilometros.iloc[:, 1] = safe_to_datetime(df_kilometros.iloc[:, 1])
-
-        # Devolver un resumen de los datos
-        usuarios_preview = df_usuarios.head().to_dict(orient='records')  # Obtener un resumen de los primeros registros
-        kilometros_preview = df_kilometros.head().to_dict(orient='records')
-
-        return {
-            "usuarios": usuarios_preview,
-            "kilometros": kilometros_preview,
-        }
-    except Exception as e:
-        print(f"Error en la previsualización del archivo: {e}")
-        return {"error": str(e)}, 500
+def process_usuarios_sheet(usuarios_sheet, single_date, datos_fecha):
+    usuarios_sheet['A1'] = single_date.strftime('%Y-%m-%d')
+    for j, ruta in enumerate(RUTAS, start=4):
+        usuarios = datos_fecha[datos_fecha['Ruta'] == ruta]['Pax'].sum()
+        usuarios_sheet[f'B{j}'] = usuarios
+    return usuarios_sheet
 
 @app.post("/upload/")
 async def upload_excel(
@@ -67,90 +87,133 @@ async def upload_excel(
     end_date: str = Form(...)
 ):
     try:
-        # Leer el archivo Excel cargado
         contents = await file.read()
         excel_data = pd.ExcelFile(BytesIO(contents))
 
-        # Acceder a la hoja "Data Usuarios" para los datos de usuarios
         df_usuarios = pd.read_excel(excel_data, sheet_name='Data Usuarios')
-
-        # Acceder a la hoja "Data Kilometros" para los datos de kilómetros
         df_kilometros = pd.read_excel(excel_data, sheet_name='Data Kilometros')
 
-        # Convertir la columna B a formato datetime para "Data Usuarios"
-        df_usuarios.iloc[:, 1] = safe_to_datetime(df_usuarios.iloc[:, 1])
+        if 'Fecha' not in df_usuarios.columns:
+            df_usuarios = df_usuarios.rename(columns={df_usuarios.columns[1]: 'Fecha'})
+        if 'Pax' not in df_usuarios.columns:
+            df_usuarios = df_usuarios.rename(columns={df_usuarios.columns[7]: 'Pax'})
+        if 'Ruta' not in df_usuarios.columns:
+            df_usuarios = df_usuarios.rename(columns={df_usuarios.columns[6]: 'Ruta'})
 
-        # Convertir la columna B a formato datetime para "Data Kilometros"
-        df_kilometros.iloc[:, 1] = safe_to_datetime(df_kilometros.iloc[:, 1])
+        if 'Fecha' not in df_kilometros.columns:
+            df_kilometros = df_kilometros.rename(columns={df_kilometros.columns[1]: 'Fecha'})
+        if 'Ruta' not in df_kilometros.columns:
+            df_kilometros = df_kilometros.rename(columns={df_kilometros.columns[6]: 'Ruta'})
+        if 'Km' not in df_kilometros.columns:
+            df_kilometros = df_kilometros.rename(columns={df_kilometros.columns[7]: 'Km'})
 
-        # Convertir las fechas de inicio y fin a formato datetime
-        start_date_dt = pd.to_datetime(start_date, format='%Y-%m-%d')
-        end_date_dt = pd.to_datetime(end_date, format='%Y-%m-%d')
+        df_usuarios = convert_to_datetime(df_usuarios, 'Fecha')
+        df_kilometros = convert_to_datetime(df_kilometros, 'Fecha')
 
-        # Generar un rango de fechas
+        start_date_dt = pd.to_datetime(start_date)
+        end_date_dt = pd.to_datetime(end_date)
         date_range = pd.date_range(start=start_date_dt, end=end_date_dt)
 
-        # Abrir la plantilla Excel
-        plantilla = openpyxl.load_workbook('PlantillaPrimera.xlsx')  # Ruta a tu plantilla Excel
+        plantilla = openpyxl.load_workbook('PlantillaSegunda.xlsx')
 
-        # Asegúrate de que el rango de fechas no exceda las 7 hojas
         if len(date_range) > 7:
-            return {"error": "El rango de fechas no puede exceder 7 días."}
+            return JSONResponse(
+                content={"error": "El rango de fechas no puede exceder 7 días."},
+                status_code=400
+            )
 
-        # Inicializar una lista para rastrear las hojas que tienen datos
-        hojas_con_datos = []
+        excel_data_dict = {}
+        country_holidays = holidays.CountryHoliday('CO')
 
-        # Iterar sobre el rango de fechas y escribir en las hojas correspondientes
         for i, single_date in enumerate(date_range):
-            # Acceder a la hoja correspondiente (Hoja1 a Hoja7)
-            sheet_name = f"Hoja{i + 1}"  # Hoja1, Hoja2, ..., Hoja7
-            sheet = plantilla[sheet_name]
+            tipo_dia = obtener_tipo_dia(single_date, country_holidays)
+            
+            # Procesar hoja de kilómetros
+            if tipo_dia == 'habil':
+                km_sheet_name = f"KILOMETROSHABIL{i + 1}"
+            elif tipo_dia == 'sabado':
+                km_sheet_name = "KILOMETROS6"
+            elif tipo_dia == 'domingo':
+                km_sheet_name = "KILOMETROS7"
+            else:
+                km_sheet_name = "KILOMETROS8"
 
-            # Filtrar usuarios y kilómetros para la fecha actual
-            mask_usuarios = (df_usuarios.iloc[:, 1] == single_date)
-            filtered_usuarios = df_usuarios.loc[mask_usuarios]
+            if km_sheet_name in plantilla.sheetnames:
+                km_sheet = plantilla[km_sheet_name]
+                datos_fecha_km = df_kilometros[df_kilometros['Fecha'].dt.date == single_date.date()]
+                km_sheet = process_km_sheet(km_sheet, single_date, datos_fecha_km)
+                excel_data_dict[km_sheet_name] = [
+                    [cell.value for cell in row] for row in km_sheet.iter_rows()
+                ]
 
-            mask_kilometros = (df_kilometros.iloc[:, 1] == single_date)
-            filtered_kilometros = df_kilometros.loc[mask_kilometros]
+            # Procesar hoja de usuarios
+            if tipo_dia == 'habil':
+                usuarios_sheet_name = f"USUARIOSHABIL{i + 1}"
+            elif tipo_dia == 'sabado':
+                usuarios_sheet_name = "USUARIOS6"
+            elif tipo_dia == 'domingo':
+                usuarios_sheet_name = "USUARIOS7"
+            else:
+                usuarios_sheet_name = "USUARIOS8"
 
-            # Escribir la fecha en la celda A1 (puedes cambiar la celda según tu necesidad)
-            sheet['A1'] = single_date.strftime('%Y-%m-%d')
+            if usuarios_sheet_name in plantilla.sheetnames:
+                usuarios_sheet = plantilla[usuarios_sheet_name]
+                datos_fecha_usuarios = df_usuarios[df_usuarios['Fecha'].dt.date == single_date.date()]
+                usuarios_sheet = process_usuarios_sheet(usuarios_sheet, single_date, datos_fecha_usuarios)
+                excel_data_dict[usuarios_sheet_name] = [
+                    [cell.value for cell in row] for row in usuarios_sheet.iter_rows()
+                ]
 
-            # Si hay datos de usuarios, escribir en la hoja correspondiente
-            if not filtered_usuarios.empty:
-                # Dividir la suma por 2
-                total_usuarios = filtered_usuarios.iloc[:, 7].sum() / 2
-                sheet['B8'] = total_usuarios  # Colocar la suma en la celda
-                hojas_con_datos.append(sheet_name)  # Añadir la hoja a la lista
-
-            # Si hay datos de kilómetros, escribir en la hoja correspondiente
-            if not filtered_kilometros.empty:
-                # Dividir la suma por 2
-                total_kilometros = filtered_kilometros.iloc[:, 7].sum() / 2
-                sheet['B3'] = total_kilometros  # Colocar la suma en la celda
-                hojas_con_datos.append(sheet_name)  # Añadir la hoja a la lista
-
-        # Ocultar las hojas que no tienen datos
-        for sheet_name in plantilla.sheetnames:
-            if sheet_name not in hojas_con_datos:
+            # Procesar hoja original
+            sheet_name = f"Hoja{i + 1}"
+            if sheet_name in plantilla.sheetnames:
                 sheet = plantilla[sheet_name]
-                sheet.sheet_state = 'hidden'  # Ocultar la hoja
+                sheet['A1'] = single_date.strftime('%Y-%m-%d')
 
-        # Guardar el archivo modificado en un buffer en memoria
+                filtered_usuarios = df_usuarios[df_usuarios['Fecha'].dt.date == single_date.date()]
+                filtered_kilometros = df_kilometros[df_kilometros['Fecha'].dt.date == single_date.date()]
+
+                if not filtered_usuarios.empty:
+                    total_usuarios = filtered_usuarios['Pax'].sum() / 2
+                    sheet['B8'] = total_usuarios
+
+                if not filtered_kilometros.empty:
+                    total_kilometros = filtered_kilometros['Km'].sum()
+                    sheet['B3'] = total_kilometros
+
+                    factor_dia = obtener_factor_dia(single_date, country_holidays)
+                    sheet['A3'] = total_kilometros / factor_dia
+
+                    sheet['B5'] = total_kilometros - (total_kilometros * 0.02)
+                    sheet['A5'] = sheet['B5'].value / factor_dia
+
+                excel_data_dict[sheet_name] = [
+                    [cell.value for cell in row] for row in sheet.iter_rows()
+                ]
+
+        for sheet_name in plantilla.sheetnames:
+            if sheet_name not in excel_data_dict:
+                sheet = plantilla[sheet_name]
+                sheet.sheet_state = 'hidden'
+
         buffer = BytesIO()
         plantilla.save(buffer)
-        buffer.seek(0)  # Mover el puntero al inicio del buffer
+        buffer.seek(0)
+        excel_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-        # Retornar el archivo Excel modificado como una respuesta de streaming
-        return StreamingResponse(
-            buffer,
-            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            headers={"Content-Disposition": "attachment; filename=resultado.xlsx"}
-        )
+        return JSONResponse(content={
+            "excel_data": excel_data_dict,
+            "excel_file": excel_base64,
+            "message": "Archivo procesado con éxito"
+        })
+
     except Exception as e:
-        print(f"Error procesando archivo: {e}")  # Imprimir el error en la consola del backend
-        return {"error": str(e)}, 500  # Retornar un código 500 con el mensaje de error
+        print(f"Error detallado: {str(e)}")
+        return JSONResponse(
+            content={"error": f"Error procesando archivo: {str(e)}"},
+            status_code=500
+        )
 
 if __name__ == "__main__":
-    print("Archivo Ejecutado")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("Servidor iniciado")
+    uvicorn.run(app, host="0.0.0.0", port=8001)

@@ -1,36 +1,45 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useDropzone } from 'react-dropzone';
-import { FileSpreadsheet, AlertCircle, CheckCircle, X } from 'lucide-react';
-import * as XLSX from 'xlsx'; // Importar SheetJS
+'use client'
 
-function App() {
-  const [file, setFile] = useState(null);
-  const [isExcel, setIsExcel] = useState(null);
-  const [showDateModal, setShowDateModal] = useState(false);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState('');
-  const [errorMessage, setErrorMessage] = useState('');
-  const [dataPreview, setDataPreview] = useState([]); // Para almacenar la vista previa de los datos
-  const fileInputRef = useRef(null);
+import React, { useState, useCallback, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useDropzone } from 'react-dropzone'
+import { FileSpreadsheet, AlertCircle, CheckCircle, X, Loader2, ChevronLeft, ChevronRight, Calendar, Upload } from 'lucide-react'
+import { DayPicker } from 'react-day-picker'
+import { format, addMonths, subMonths, isWeekend, isSameDay } from 'date-fns'
+import { es } from 'date-fns/locale'
+import 'react-day-picker/dist/style.css'
+
+const colombianHolidays = [
+  new Date(2024, 0, 1), new Date(2024, 0, 8), new Date(2024, 2, 25), new Date(2024, 2, 28), new Date(2024, 2, 29),
+  new Date(2024, 4, 1), new Date(2024, 5, 3), new Date(2024, 5, 24), new Date(2024, 6, 1), new Date(2024, 6, 20),
+  new Date(2024, 7, 7), new Date(2024, 7, 19), new Date(2024, 9, 14), new Date(2024, 10, 4), new Date(2024, 10, 11),
+  new Date(2024, 11, 8), new Date(2024, 11, 25)
+]
+
+export default function Component() {
+  const [file, setFile] = useState(null)
+  const [isExcel, setIsExcel] = useState(null)
+  const [showDateModal, setShowDateModal] = useState(false)
+  const [range, setRange] = useState({ from: undefined, to: undefined })
+  const [isLoading, setIsLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
+  const [month, setMonth] = useState(new Date())
+  const fileInputRef = useRef(null)
 
   const onDrop = useCallback((acceptedFiles) => {
-    handleFile(acceptedFiles[0]);
-  }, []);
+    handleFile(acceptedFiles[0])
+  }, [])
 
   const handleFile = (selectedFile) => {
     if (selectedFile) {
-      setFile(selectedFile);
-      const isExcelFile = selectedFile.name.endsWith('.xlsx') || selectedFile.name.endsWith('.xls');
-      setIsExcel(isExcelFile);
-
+      setFile(selectedFile)
+      const isExcelFile = selectedFile.name.endsWith('.xlsx') || selectedFile.name.endsWith('.xls')
+      setIsExcel(isExcelFile)
       if (isExcelFile) {
-        setShowDateModal(true);
+        setShowDateModal(true)
       }
     }
-  };
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -39,96 +48,107 @@ function App() {
       'application/vnd.ms-excel': ['.xls'],
     },
     noClick: true,
-  });
+  })
 
   const resetFile = () => {
-    setFile(null);
-    setIsExcel(null);
-    setStartDate('');
-    setEndDate('');
-    setDownloadUrl('');
-    setShowDateModal(false);
-    setErrorMessage(''); // Reset error message when resetting the file
-    setDataPreview([]); // Reinicia la vista previa de los datos
-  };
+    setFile(null)
+    setIsExcel(null)
+    setRange({ from: undefined, to: undefined })
+    setShowDateModal(false)
+    setErrorMessage('')
+  }
 
   const handleSaveDates = async () => {
-    if (!file || !startDate || !endDate) {
-      setErrorMessage('Por favor, selecciona un archivo y proporciona las fechas.');
-      return;
+    if (!file || !range.from || !range.to) {
+      setErrorMessage('Por favor, selecciona un archivo y un rango de fechas.')
+      return
     }
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('start_date', startDate);
-    formData.append('end_date', endDate);
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('start_date', format(range.from, 'yyyy-MM-dd'))
+    formData.append('end_date', format(range.to, 'yyyy-MM-dd'))
 
-    setIsLoading(true);
+    setIsLoading(true)
+    setErrorMessage('')
     try {
-      const response = await fetch('http://localhost:8000/upload/', {
-        method: 'POST',
-        body: formData,
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
+      const response = await fetch('http://localhost:8001/upload/', { 
+        method: 'POST', 
+        body: formData 
+      })
 
-      const contentType = response.headers.get('content-type');
-
-      if (!response.ok) {
-        const result = await response.json();
-        if (result.error) {
-          setErrorMessage(result.error);
-          setShowDateModal(false);
-          return;
+      if (response.ok) {
+        const result = await response.json()
+        console.log('Datos recibidos del servidor:', result)
+        
+        const byteCharacters = atob(result.excel_file)
+        const byteNumbers = new Array(byteCharacters.length)
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i)
         }
-        throw new Error(`Error al enviar las fechas: ${response.statusText}`);
-      }
-
-      if (contentType && contentType.includes('application/json')) {
-        const result = await response.json();
-        if (result.error) {
-          setErrorMessage(result.error);
-          setShowDateModal(false);
-          return;
-        }
-        // Suponiendo que el backend retorna los datos procesados en formato JSON
-        if (result.data) {
-          setDataPreview(result.data); // Establece la vista previa de los datos
-        }
-      } else if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-        const result = await response.blob();
-        const url = window.URL.createObjectURL(result);
-        setDownloadUrl(url);
+        const byteArray = new Uint8Array(byteNumbers)
+        const blob = new Blob([byteArray], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+        
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.style.display = 'none'
+        a.href = url
+        a.download = 'archivo_procesado.xlsx'
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        
+        alert('Archivo procesado con éxito. La descarga comenzará automáticamente.')
       } else {
-        throw new Error('Tipo de respuesta inesperado.');
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Error en la respuesta del servidor')
       }
     } catch (error) {
-      console.error('Error al enviar las fechas:', error);
-      setErrorMessage('Error al procesar el archivo. Por favor, inténtalo de nuevo.');
+      console.error('Error al procesar el archivo:', error)
+      setErrorMessage(`Error: ${error.message}`)
     } finally {
-      setIsLoading(false);
-      setShowDateModal(false);
+      setIsLoading(false)
+      setShowDateModal(false)
     }
-  };
+  }
+
+  const isHoliday = (date) => {
+    return colombianHolidays.some(holiday => 
+      holiday.getDate() === date.getDate() &&
+      holiday.getMonth() === date.getMonth() &&
+      holiday.getFullYear() === date.getFullYear()
+    )
+  }
 
   return (
-    <div className="w-full min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-green-400 to-blue-500 p-4">
+    <motion.div 
+      className="w-full min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-green-400 to-emerald-600 p-4"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 1 }}
+    >
       <motion.div
         initial={{ opacity: 0, y: -50 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md"
+        transition={{ duration: 0.5, delay: 0.2 }}
+        className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md"
       >
-        <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">Bufalo</h1>
+        <motion.h1 
+          className="text-5xl font-bold text-center mb-8 text-emerald-700"
+          initial={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 260, damping: 20, delay: 0.3 }}
+        >
+          Bufalo
+        </motion.h1>
 
         <motion.div
           {...getRootProps()}
-          onClick={() => fileInputRef.current.click()}
-          className={`relative overflow-hidden rounded-xl border-4 border-dashed p-8 transition-colors ${
-            isDragActive ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-green-400'
-          }`}
-          whileHover={{ scale: 1.02 }}
+          onClick={() => fileInputRef.current?.click()}
+          className={`relative overflow-hidden rounded-2xl p-8 transition-all duration-300 ${
+            isDragActive ? 'bg-emerald-100' : 'bg-gray-50'
+          } ${file ? 'border-4 border-emerald-500' : 'border-4 border-dashed border-gray-300'}`}
+          whileHover={{ scale: 1.02, boxShadow: "0px 0px 20px rgba(16, 185, 129, 0.2)" }}
           whileTap={{ scale: 0.98 }}
         >
           <input
@@ -136,7 +156,7 @@ function App() {
             ref={fileInputRef}
             onChange={(e) => {
               if (e.target.files) {
-                handleFile(e.target.files[0]);
+                handleFile(e.target.files[0])
               }
             }}
           />
@@ -154,32 +174,33 @@ function App() {
                   transition={isExcel ? { duration: 0.5 } : { duration: 0.5, repeat: Infinity }}
                 >
                   {isExcel ? (
-                    <CheckCircle className="mx-auto text-green-500" size={64} />
+                    <CheckCircle className="mx-auto text-emerald-500" size={64} />
                   ) : (
                     <AlertCircle className="mx-auto text-red-500" size={64} />
                   )}
                 </motion.div>
                 <motion.p
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`mt-4 text-lg font-semibold ${isExcel ? 'text-green-600' : 'text-red-600'}`}
+                  className={`mt-4 text-lg font-semibold ${isExcel ? 'text-emerald-600' : 'text-red-600'}`}
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.2 }}
                 >
                   {isExcel ? '¡Excel válido!' : 'Archivo no válido'}
                 </motion.p>
-                <motion.p
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.2 }}
-                  className="mt-2 text-sm text-gray-500"
+                <motion.p 
+                  className="mt-2 text-sm text-gray-600"
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.3 }}
                 >
                   {file.name}
                 </motion.p>
                 <motion.button
                   onClick={(e) => {
-                    e.stopPropagation();
-                    resetFile();
+                    e.stopPropagation()
+                    resetFile()
                   }}
-                  className="mt-4 ml-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-full inline-flex items-center"
+                  className="mt-4 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-full inline-flex items-center transition-all duration-300"
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                 >
@@ -195,149 +216,154 @@ function App() {
                 exit={{ opacity: 0, scale: 0.8 }}
                 className="text-center"
               >
-                <motion.div
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{ duration: 1.5, repeat: Infinity }}
+                <motion.div 
+                  className="bg-emerald-500 rounded-full p-4 inline-block"
+                  animate={{ y: [0, -10, 0] }} 
+                  transition={{ duration: 1.5, repeat: Infinity, repeatType: "reverse" }}
                 >
-                  <FileSpreadsheet className="mx-auto text-green-500" size={64} />
+                  <Upload className="text-white" size={48} />
                 </motion.div>
-                <p className="mt-4 text-lg font-semibold text-gray-700">Arrastra tu archivo Excel aquí</p>
-                <p className="mt-2 text-sm text-gray-500">o haz clic para seleccionar</p>
+                <motion.p 
+                  className="mt-4 text-lg font-semibold text-emerald-700"
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.2 }}
+                >
+                  Arrastra tu archivo Excel aquí
+                </motion.p>
+                <motion.p 
+                  className="mt-2 text-sm text-gray-600"
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.3 }}
+                >
+                  o haz clic para seleccionar
+                </motion.p>
               </motion.div>
             )}
           </AnimatePresence>
         </motion.div>
 
-        {showDateModal && (
-          <motion.div
-            className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
+        <AnimatePresence>
+          {showDateModal && (
             <motion.div
-              className="bg-white p-6 rounded-lg shadow-lg text-center"
-              initial={{ scale: 0.8 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.8 }}
+              initial={{ opacity: 0, y: -50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -50 }}
+              className="mt-6"
             >
-              <h2 className="text-2xl font-semibold mb-4 text-gray-800">Seleccionar Fechas</h2>
-              <div className="flex flex-col space-y-4">
-                <div>
-                  <label className="block mb-2 text-sm font-bold text-gray-700">Fecha de Inicio</label>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full p-2 border rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-2 text-sm font-bold text-gray-700">Fecha de Fin</label>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full p-2 border rounded-lg"
-                  />
-                </div>
-              </div>
-              <div className="mt-4 space-x-2">
-                <button
-                  onClick={handleSaveDates}
-                  className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-full"
-                >
-                  Guardar
-                </button>
-                <button
-                  onClick={() => setShowDateModal(false)}
-                  className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-full"
-                >
-                  Cancelar
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-
-        {isLoading && (
-          <motion.div
-            className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <motion.div
-              className="bg-white p-6 rounded-lg shadow-lg text-center"
-              initial={{ scale: 0.8 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.8 }}
-            >
-              <h2 className="text-2xl font-semibold mb-4 text-gray-800">Procesando...</h2>
-              <div className="w-16 h-16 border-t-4 border-blue-500 border-solid rounded-full animate-spin"></div>
-            </motion.div>
-          </motion.div>
-        )}
-
-        {errorMessage && (
-          <motion.div
-            className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <div className="bg-white p-6 rounded-lg shadow-lg text-center">
-              <h2 className="text-2xl font-semibold mb-4 text-gray-800">Error</h2>
-              <p className="text-red-500">{errorMessage}</p>
-              <button
-                onClick={() => setErrorMessage('')}
-                className="mt-4 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-full"
+              <motion.h2 
+                className="text-2xl font-semibold text-emerald-700 mb-4 text-center"
+                initial={{ x: -20, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ delay: 0.1 }}
               >
-                Cerrar
-              </button>
-            </div>
-          </motion.div>
-        )}
-
-        {downloadUrl && (
-          <div className="mt-4">
-            <a
-              href={downloadUrl}
-              download="archivo_procesado.xlsx"
-              className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-full inline-block"
-            >
-              Descargar Archivo Procesado
-            </a>
-          </div>
-        )}
-
-        {/* Mostrar vista previa de los datos si está disponible */}
-        {dataPreview.length > 0 && (
-          <div className="mt-4">
-            <h2 className="text-lg font-semibold text-gray-800">Vista Previa de Datos</h2>
-            <table className="min-w-full mt-2 border border-gray-300">
-              <thead>
-                <tr>
-                  {Object.keys(dataPreview[0]).map((key) => (
-                    <th key={key} className="border-b px-4 py-2 text-left text-gray-600">{key}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {dataPreview.map((row, index) => (
-                  <tr key={index} className="hover:bg-gray-100">
-                    {Object.values(row).map((value, idx) => (
-                      <td key={idx} className="border-b px-4 py-2">{value}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                Selecciona el rango de fechas:
+              </motion.h2>
+              <div className="flex justify-center">
+                <DayPicker
+                  mode="range"
+                  selected={range}
+                  onSelect={setRange}
+                  locale={es}
+                  month={month}
+                  onMonthChange={setMonth}
+                  showOutsideDays
+                  className="border rounded-lg shadow-lg p-4 bg-white"
+                  classNames={{
+                    months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
+                    month: "space-y-4",
+                    caption: "flex justify-center relative items-center",
+                    caption_label: "text-sm font-medium text-gray-900",
+                    nav: "space-x-1 flex items-center",
+                    nav_button: "h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100",
+                    nav_button_previous: "absolute left-1",
+                    nav_button_next: "absolute right-1",
+                    table: "w-full border-collapse space-y-1",
+                    head_row: "flex",
+                    head_cell: "text-emerald-600 rounded-md w-9 font-normal text-[0.8rem]",
+                    row: "flex w-full mt-2",
+                    cell: "text-center text-sm p-0 relative [&:has([aria-selected])]:bg-emerald-100 first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
+                    day: "h-9 w-9 p-0 font-normal aria-selected:opacity-100",
+                    day_selected: "bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white focus:bg-emerald-500 focus:text-white",
+                    day_today: "bg-gray-100 text-emerald-500 font-bold",
+                    day_outside: "text-gray-300 opacity-50",
+                    day_disabled: "text-gray-300",
+                    day_range_middle: "aria-selected:bg-emerald-100 aria-selected:text-emerald-700",
+                    day_hidden: "invisible",
+                  }}
+                  components={{
+                    IconLeft: () => <ChevronLeft className="h-4 w-4 text-emerald-600" />,
+                    IconRight: () => <ChevronRight className="h-4 w-4 text-emerald-600" />,
+                
+                    DayContent: ({ date, ...props }) => {
+                      const dayOfMonth = format(date, 'd')
+                      const isSelected = range.from && range.to && (
+                        isSameDay(date, range.from) || 
+                        isSameDay(date, range.to) || 
+                        (date > range.from && date < range.to)
+                      )
+                      return (
+                        <motion.div
+                          className={`flex items-center justify-center w-full h-full rounded-full transition-colors
+                            ${isHoliday(date) ? 'bg-red-100 text-red-600' : ''}
+                            ${isWeekend(date) ? 'text-emerald-600 font-semibold' : ''}
+                            ${isSelected ? 'bg-emerald-500 text-white' : ''}
+                            ${isSameDay(date, range.from) ? 'ring-2 ring-emerald-500' : ''}
+                            ${isSameDay(date, range.to) ? 'ring-2 ring-emerald-500' : ''}
+                          `}
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          {...props}
+                        >
+                          {dayOfMonth}
+                        </motion.div>
+                      )
+                    },
+                  }}
+                />
+              </div>
+              <div className="mt-4 text-center text-sm text-emerald-700">
+                <p>Rango seleccionado:</p>
+                <p className="font-semibold">
+                  {range.from ? format(range.from, 'dd/MM/yyyy') : '___'} 
+                  {' - '}
+                  {range.to ? format(range.to, 'dd/MM/yyyy') : '___'}
+                </p>
+              </div>
+              {errorMessage && (
+                <motion.p 
+                  className="text-red-500 mt-4 text-center"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  {errorMessage}
+                </motion.p>
+              )}
+              <motion.button
+                onClick={handleSaveDates}
+                className="mt-6 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-6 rounded-full w-full flex items-center justify-center transition-all duration-300"
+                whileHover={{ scale: 1.05, boxShadow: "0px 0px 15px rgba(16, 185, 129, 0.3)" }}
+                whileTap={{ scale: 0.95 }}
+                disabled={isLoading || !range.from || !range.to}
+              >
+                {isLoading ? (
+                  <motion.span
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  >
+                    <Loader2 className="mr-2" />
+                  </motion.span>
+                ) : (
+                  <Calendar className="mr-2" />
+                )}
+                {isLoading ? 'Procesando...' : 'Guardar y Enviar'}
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
-    </div>
-  );
+    </motion.div>
+  )
 }
-
-export default App;
