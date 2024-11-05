@@ -139,7 +139,7 @@ export default function Component() {
           animate={{ scale: 1, opacity: 1 }}
           transition={{ type: "spring", stiffness: 260, damping: 20, delay: 0.3 }}
         >
-          Bufalo
+          Informe
         </motion.h1>
 
         <motion.div

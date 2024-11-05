@@ -23,7 +23,7 @@ app.add_middleware(
 # Lista de rutas
 RUTAS = [
     'C6-001', 'C6-002', 'C6-002A', 'C6-003', 'C6-004', 'C6-005', 'C6-005A', 'C6-006C',
-    'C6-007', 'C6-008', 'C6-009', 'C6-010B', 'C6-011', 'C6-012', 'C6-012A', 'C6-013',
+    'C6-007', 'C6-008', 'C6-009', 'C6-010C', 'C6-010B', 'C6-011', 'C6-012', 'C6-012A', 'C6-013',
     'C6-014', 'C6-015A', 'C6-016', 'C6-016A', 'C6-018', 'C6-019', 'C6-019A', 'C6-020',
     'C6-021', 'C6-022', 'C6-022A', 'C6-023', 'C6-024', 'C6-025', 'C6-025B'
 ]
@@ -31,12 +31,12 @@ RUTAS = [
 def obtener_factor_dia(fecha, country_holidays):
     if fecha.weekday() < 5:  # Lunes a Viernes
         if fecha.date() not in country_holidays:
-            return 205  # Día hábil
-        return 100  # Festivo (si cae en día laboral)
+            return 209  # Día hábil
+        return 106  # Festivo (si cae en día laboral)
     elif fecha.weekday() == 5:  # Sábado
-        return 150
+        return 173
     else:  # Domingo
-        return 100
+        return 106
 
 def obtener_tipo_dia(fecha, country_holidays):
     if fecha.date() in country_holidays:
